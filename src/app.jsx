@@ -21,8 +21,9 @@ import { AreaChart, Area, Tooltip, ResponsiveContainer } from 'recharts';
 
 // Firebase Imports
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, onSnapshot, query, writeBatch } from 'firebase/firestore';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
+import { getFirestore, collection, doc, onSnapshot, query, writeBatch, setDoc } from 'firebase/firestore';
+import { cpf, cnpj } from 'cpf-cnpj-validator'; 
 
 // --- CONFIGURAÇÃO FIREBASE ---
 const firebaseConfig = {
@@ -62,7 +63,7 @@ const INITIAL_CHART_DATA = [
   { name: 'Hoje', balance: 3450 },
 ];
 
-// --- LÓGICA DE NEGÓCIO ---
+// --- LÓGICA DE NEGÓCIO --
 
 // Processador de Extrato Inteligente
 const smartCategorize = (transaction) => {
@@ -103,6 +104,79 @@ const ServiceCard = ({ title, icon, color, description, onClick, active }) => (
   </button>
 );
 
+const AuthComponent = ({ onLogin }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [document, setDocument] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleAuth = async () => {
+    setError('');
+    if (isRegistering) {
+      if (!cpf.isValid(document) && !cnpj.isValid(document)) {
+        setError('CPF/CNPJ inválido.');
+        return;
+      }
+      try {
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const user = userCredential.user;
+        await setDoc(doc(db, 'users', user.uid), {
+          email: user.email,
+          document: document
+        });
+        onLogin(user);
+      } catch (e) {
+        setError(e.message);
+      }
+    } else {
+      try {
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        onLogin(userCredential.user);
+      } catch (e) {
+        setError(e.message);
+      }
+    }
+  };
+
+  return (
+    <div className="p-6">
+      <h2 className="text-2xl font-bold mb-4">{isRegistering ? 'Cadastro' : 'Login'}</h2>
+      {error && <p className="text-red-500 mb-4">{error}</p>}
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="Email"
+        className="w-full p-2 mb-4 border rounded"
+      />
+      <input
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="Senha"
+        className="w-full p-2 mb-4 border rounded"
+      />
+      {isRegistering && (
+        <input
+          type="text"
+          value={document}
+          onChange={(e) => setDocument(e.target.value)}
+          placeholder="CPF ou CNPJ"
+          className="w-full p-2 mb-4 border rounded"
+        />
+      )}
+      <button onClick={handleAuth} className="w-full bg-slate-900 text-white p-2 rounded">
+        {isRegistering ? 'Cadastrar' : 'Entrar'}
+      </button>
+      <button onClick={() => setIsRegistering(!isRegistering)} className="w-full mt-2 text-sm text-center">
+        {isRegistering ? 'Já tem uma conta? Entre' : 'Não tem uma conta? Cadastre-se'}
+      </button>
+    </div>
+  );
+};
+
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('home'); 
@@ -112,20 +186,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
 
-  // 1. Autenticação Simplificada
   useEffect(() => {
-    signInAnonymously(auth).catch((error) => {
-        const errorCode = error.code;
-        // Mensagens de erro amigáveis para o utilizador
-        if (errorCode === 'auth/configuration-not-found' || errorCode === 'auth/admin-restricted-operation') {
-           setAuthError('O login Anónimo não está ativo no Firebase. Aceda à Consola > Authentication > Sign-in method e ative o fornecedor "Anonymous".');
-        } else {
-           setAuthError(`Erro de autenticação: ${errorCode}. Verifique a sua ligação.`);
-        }
-        console.error("Erro detalhado na autenticação:", error);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setLoading(false);
     });
-    
-    const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
   }, []);
 
@@ -184,6 +249,15 @@ export default function App() {
   };
 
   const greeting = getGreeting();
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
+
+  if (!user) {
+    return <AuthComponent onLogin={setUser} />;
+  }
+
 
   const renderContent = () => {
     if (activeTab === 'pix') return (
@@ -305,7 +379,7 @@ export default function App() {
                         <p className="text-xs text-gray-400 font-medium">{smart.category} • {smart.date}</p>
                       </div>
                     </div>
-                    <span className={`font-bold ${t.type === 'in' ? 'text-green-600' : 'text-gray-800'}`}>
+                    <span className={`font-bold ${t.type === 'in' ? 'text-green-600' : 'text-gray-800'}`}>\
                       {t.type === 'in' ? '+' : '-'} R$ {Math.abs(t.amount).toFixed(2).replace('.', ',')}
                     </span>
                   </div>
@@ -367,7 +441,9 @@ export default function App() {
         <main className="px-6 pb-24">
           {renderContent()}
         </main>
-
+        <button onClick={handleLogout} className="absolute top-4 right-4 bg-red-500 text-white p-2 rounded">
+          Logout
+        </button>
         <nav className="fixed bottom-0 left-0 w-full bg-white border-t border-gray-100 p-4 pb-6 flex justify-around items-center md:absolute md:max-w-md md:left-auto">
           <button onClick={() => setActiveTab('home')} className={`p-2 rounded-xl transition-colors ${activeTab === 'home' ? 'text-slate-900 bg-gray-100' : 'text-gray-400 hover:text-gray-600'}`}><Home size={24} /></button>
           <button className="p-2 rounded-xl text-gray-400 hover:text-gray-600"><Wallet size={24} /></button>
